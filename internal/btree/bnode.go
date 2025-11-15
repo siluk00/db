@@ -16,19 +16,41 @@ const (
 	BNODE_LEAF = 2
 )
 
+const BTREE_PAGE_SIZE = 4096
+const BTREE_MAX_KEY_SIZE = 1000
+const BTREE_MAX_VAL_SIZE = 3000
+
+func init() {
+	node1max := HEADER + 8 + 2 + 4 + BTREE_MAX_KEY_SIZE + BTREE_MAX_VAL_SIZE
+	if !(node1max <= BTREE_PAGE_SIZE) {
+		panic("node1max larger than page size")
+	}
+}
+
+type BTree struct {
+	root     uint64
+	get      func(uint64) []byte
+	newBTree func([]byte) uint64
+	del      func(uint64)
+}
+
+// Btypes Node or leaf
 func (node BNode) bType() uint16 {
 	return binary.LittleEndian.Uint16(node[0:2])
 }
 
+// Number of keys in KV, in case of BNODE_NODE nKeys = number of childs
 func (node BNode) nKeys() uint16 {
 	return binary.LittleEndian.Uint16(node[2:4])
 }
 
+// Header of 4 bytes = btype(2 bytes) : nKeys(2 bytes)
 func (node BNode) setHeader(btype, nKeys uint16) {
 	binary.LittleEndian.PutUint16(node[0:2], btype)
 	binary.LittleEndian.PutUint16(node[2:4], nKeys)
 }
 
+// After header theres a list of pointers to the child nodes in the case B_NODE_NODE btype
 func (node BNode) getPtr(idx uint16) uint64 {
 	if !(idx < node.nKeys()) {
 		panic("nKeys should be greater then index")
@@ -38,12 +60,13 @@ func (node BNode) getPtr(idx uint16) uint64 {
 	return binary.LittleEndian.Uint64(node[pos:])
 }
 
-// HEY
+// Sets the pointer to child
 func (node BNode) setPtr(idx uint16, val uint64) {
 	pos := HEADER + 8*idx
 	binary.LittleEndian.PutUint64(node[pos:], val)
 }
 
+// helper function for getOffset in case index != 0
 func offsetPos(node BNode, idx uint16) uint16 {
 	if !(1 <= idx && idx <= node.nKeys()) {
 		panic("")
@@ -63,10 +86,16 @@ func (node BNode) getOffset(idx uint16) uint16 {
 	return binary.LittleEndian.Uint16(node[offsetPos(node, idx):])
 }
 
+// Sets the offset of idx to offset
 func (node BNode) setOffset(idx, offset uint16) {
+	if idx == 0 || idx > node.nKeys() {
+		panic("")
+	}
 
+	binary.LittleEndian.PutUint16(node[offsetPos(node, idx):], offset)
 }
 
+// Returns the position in wich the kv is stored on BNode based on idx
 func (node BNode) kvPos(idx uint16) uint16 {
 	if !(idx <= node.nKeys()) {
 		panic("")
@@ -75,6 +104,9 @@ func (node BNode) kvPos(idx uint16) uint16 {
 	return HEADER + 8*node.nKeys() + 2*node.nKeys() + node.getOffset(idx)
 }
 
+// gets key by idx by searching first the kvposition
+// after HEADER + ptr + offset theres the key with 2 bytes for klen and 2 bytes for vlen
+// then slices with value of klen
 func (node BNode) getKey(idx uint16) []byte {
 	if !(idx < node.nKeys()) {
 		panic("")
@@ -85,16 +117,21 @@ func (node BNode) getKey(idx uint16) []byte {
 	return node[pos+4:][:klen]
 }
 
-// TODO
+// gets the value after Key
 func (node BNode) getVal(idx uint16) []byte {
-	return []byte{0}
+	pos := node.kvPos(idx)
+	klen := binary.LittleEndian.Uint16(node[pos:])
+	vlen := binary.LittleEndian.Uint16(node[pos+2:])
+	return node[pos+4+klen:][:vlen]
 }
 
+// returns the last index written on BNode
 func (node BNode) nBytes() uint16 {
 	return node.kvPos(node.nKeys())
 }
 
 // TODO: Binary Search
+// Searches for key child inside BNode, returns the first child node whose range intersects key
 func nodeLookupLE(node BNode, key []byte) uint16 {
 	nKeys := node.nKeys()
 	found := uint16(0)
@@ -113,6 +150,7 @@ func nodeLookupLE(node BNode, key []byte) uint16 {
 	return found
 }
 
+// adds new kv inside a leaf
 func leafInsert(newBNode, oldBNode BNode, idx uint16, key, val []byte) {
 	newBNode.setHeader(BNODE_LEAF, oldBNode.nKeys()+1)
 	nodeAppendRange(newBNode, oldBNode, 0, 0, idx)
@@ -121,9 +159,10 @@ func leafInsert(newBNode, oldBNode BNode, idx uint16, key, val []byte) {
 
 }
 
+// sets child pointer for BNODE_NODE
+// sets key/value to position pointed by offset and sets offset of the next kv for BNODE_LEAF
 func nodeAppendKV(newBNode BNode, idx uint16, ptr uint64, key, val []byte) {
 	newBNode.setPtr(idx, uint64(ptr))
-
 	pos := newBNode.kvPos(idx)
 	binary.LittleEndian.PutUint16(newBNode[pos:], uint16(len(key)))
 	binary.LittleEndian.PutUint16(newBNode[pos+2:], uint16(len(val)))
@@ -133,8 +172,36 @@ func nodeAppendKV(newBNode BNode, idx uint16, ptr uint64, key, val []byte) {
 	newBNode.setOffset(idx+1, uint16(newBNode.getOffset(idx)+4+uint16((len(key)+len(val)))))
 }
 
+// appends a range of
 func nodeAppendRange(newBNode, oldBNode BNode, dstNew, srcOld, n uint16) {
+	if n == 0 {
+		return
+	}
 
+	// Copy offsets, pointers, and KV data for the range
+	for i := uint16(0); i < n; i++ {
+		srcIdx := srcOld + i
+		dstIdx := dstNew + i
+
+		// Copy pointer (for internal nodes) or set to 0 (for leaf nodes)
+		if oldBNode.bType() == BNODE_NODE {
+			newBNode.setPtr(dstIdx, oldBNode.getPtr(srcIdx))
+		} else {
+			newBNode.setPtr(dstIdx, 0)
+		}
+
+		// Copy key-value data
+		key := oldBNode.getKey(srcIdx)
+		val := oldBNode.getVal(srcIdx)
+		pos := newBNode.kvPos(dstIdx)
+		binary.LittleEndian.PutUint16(newBNode[pos:], uint16(len(key)))
+		binary.LittleEndian.PutUint16(newBNode[pos+2:], uint16(len(val)))
+		copy(newBNode[pos+4:], key)
+		copy(newBNode[pos+4+uint16(len(key)):], val)
+
+		// Update offset for next position
+		newBNode.setOffset(dstIdx+1, newBNode.getOffset(dstIdx)+4+uint16(len(key)+len(val)))
+	}
 }
 
 func nodeAppendKidN(tree *BTree, newBNode, oldBNode BNode, idx uint16, kids ...BNode) {
@@ -175,3 +242,36 @@ func nodeSplit3(old BNode) (uint16, [3]BNode) {
 
 	return 3, [3]BNode{left, middle, right}
 }
+
+func treeInsert(tree *BTree, node BNode, key, val []byte) BNode {
+	newBNode := BNode(make([]byte, 2*BTREE_PAGE_SIZE))
+
+	idx := nodeLookupLE(node, key)
+
+	switch node.bType() {
+	case BNODE_LEAF:
+		if bytes.Equal(key, node.getKey(idx)) {
+			leafUpdate(newBNode, node, idx, key, val)
+		} else {
+			leafInsert(newBNode, node, idx+1, key, val)
+		}
+	case BNODE_NODE:
+		nodeInsert(tree, newBNode, node, idx, key, val)
+	default:
+		panic("bad node")
+	}
+
+	return newBNode
+}
+
+func leafUpdate(newBNode, node BNode, idx uint16, key, val []byte) {}
+
+func nodeInsert(tree *BTree, newBNode, node BNode, idx uint16, key, val []byte) {
+	kptr := node.getPtr(idx)
+	knode := treeInsert(tree, tree.get(kptr), key, val)
+	nsplit, split := nodeSplit3(knode)
+	tree.del(kptr)
+	nodeReplaceKidN(tree, newBNode, node, idx, split[:nsplit]...)
+}
+
+func nodeReplaceKidN(tree *BTree, newBNode, oldBNode BNode, idx uint16, kids ...BNode) {}
