@@ -1,5 +1,7 @@
 package btree
 
+import "bytes"
+
 func (tree *BTree) Insert(key, val []byte) {
 	if tree.root == 0 {
 		root := BNode(make([]byte, BTREE_PAGE_SIZE))
@@ -32,19 +34,61 @@ func (tree *BTree) Insert(key, val []byte) {
 }
 
 func (tree *BTree) Delete(key []byte) bool {
-	return false
+	if tree.root == 0 {
+		return false
+	}
+
+	updated := treeDelete(tree, BNode(tree.get(tree.root)), key)
+	if len(updated) == 0 {
+		// Key not found
+		return false
+	}
+
+	tree.del(tree.root)
+
+	if updated.nKeys() == 0 {
+		// Tree became empty
+		tree.root = 0
+	} else {
+		tree.root = tree.newBNode(updated)
+	}
+
+	return true
 }
 
 // remove a key from a leaf node
-func leafDelete(new BNode, old BNode, idx uint16)
+func leafDelete(new BNode, old BNode, idx uint16) {
+	new.setHeader(BNODE_LEAF, old.nKeys()-1)
+
+	// Copy all keys before the deleted one
+	nodeAppendRange(new, old, 0, 0, idx)
+	// Copy all keys after the deleted one
+	nodeAppendRange(new, old, idx, idx+1, old.nKeys()-(idx+1))
+}
 
 // merge 2 nodes into 1
-func nodeMerge(new BNode, left BNode, right BNode)
+func nodeMerge(new BNode, left BNode, right BNode) {
+	new.setHeader(left.bType(), left.nKeys()+right.nKeys())
+
+	// Copy all keys from left node
+	nodeAppendRange(new, left, 0, 0, left.nKeys())
+	// Copy all keys from right node
+	nodeAppendRange(new, right, left.nKeys(), 0, right.nKeys())
+}
 
 // replace 2 adjacent links with 1
 func nodeReplace2Kid(
 	new BNode, old BNode, idx uint16, ptr uint64, key []byte,
-)
+) {
+	new.setHeader(BNODE_NODE, old.nKeys()-1)
+
+	// Copy nodes before the replacement point
+	nodeAppendRange(new, old, 0, 0, idx)
+	// Insert the merged node
+	nodeAppendKV(new, idx, ptr, key, nil)
+	// Copy nodes after the replacement point (skip one)
+	nodeAppendRange(new, old, idx+1, idx+2, old.nKeys()-(idx+2))
+}
 
 func shouldMerge(tree *BTree, node BNode, idx uint16, updated BNode) (int, BNode) {
 	if updated.nBytes() > BTREE_PAGE_SIZE/4 {
@@ -73,7 +117,26 @@ func shouldMerge(tree *BTree, node BNode, idx uint16, updated BNode) (int, BNode
 
 // delete a key from the tree
 func treeDelete(tree *BTree, node BNode, key []byte) BNode {
-	return BNode{}
+	idx := nodeLookupLE(node, key)
+
+	switch node.bType() {
+	case BNODE_LEAF:
+		if bytes.Equal(key, node.getKey(idx)) {
+			// Key found in leaf - delete it
+			new := BNode(make([]byte, BTREE_PAGE_SIZE))
+			leafDelete(new, node, idx)
+			return new
+		} else {
+			// Key not found
+			return BNode{}
+		}
+
+	case BNODE_NODE:
+		return nodeDelete(tree, node, idx, key)
+
+	default:
+		panic("bad node")
+	}
 }
 
 func nodeDelete(tree *BTree, node BNode, idx uint16, key []byte) BNode {
