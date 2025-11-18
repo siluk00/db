@@ -1,11 +1,18 @@
 package btree
 
-import "unsafe"
+import (
+	"testing"
+	"unsafe"
+)
 
 type C struct {
 	tree  BTree
 	ref   map[string]string
 	pages map[uint64]BNode
+}
+
+func testTree(t *testing.T) {
+
 }
 
 func newC() *C {
@@ -19,7 +26,7 @@ func newC() *C {
 				}
 				return node
 			},
-			newBTree: func(node []byte) uint64 {
+			newBNode: func(node []byte) uint64 {
 				if !(BNode(node).nBytes() <= BTREE_PAGE_SIZE) {
 					panic("")
 				}

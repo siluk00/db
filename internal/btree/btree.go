@@ -9,7 +9,7 @@ func (tree *BTree) Insert(key, val []byte) {
 		//thus lookup can always find a containing node
 		nodeAppendKV(root, 0, 0, nil, nil)
 		nodeAppendKV(root, 1, 0, key, val)
-		tree.root = tree.newBTree(root)
+		tree.root = tree.newBNode(root)
 		return
 	}
 
@@ -21,13 +21,13 @@ func (tree *BTree) Insert(key, val []byte) {
 		root.setHeader(BNODE_NODE, nsplit)
 
 		for i, knode := range split[:nsplit] {
-			ptr, key := tree.newBTree(knode), knode.getKey(0)
+			ptr, key := tree.newBNode(knode), knode.getKey(0)
 			nodeAppendKV(root, uint16(i), ptr, key, nil)
 		}
 
-		tree.root = tree.newBTree(root)
+		tree.root = tree.newBNode(root)
 	} else {
-		tree.root = tree.newBTree(split[0])
+		tree.root = tree.newBNode(split[0])
 	}
 }
 
@@ -92,12 +92,12 @@ func nodeDelete(tree *BTree, node BNode, idx uint16, key []byte) BNode {
 		merged := BNode(make([]byte, BTREE_PAGE_SIZE))
 		nodeMerge(merged, sibling, updated)
 		tree.del(node.getPtr(idx - 1))
-		nodeReplace2Kid(newBnode, node, idx-1, tree.newBTree(merged), merged.getKey(0))
+		nodeReplace2Kid(newBnode, node, idx-1, tree.newBNode(merged), merged.getKey(0))
 	case mergeDir > 0:
 		merged := BNode(make([]byte, BTREE_PAGE_SIZE))
 		nodeMerge(merged, updated, sibling)
 		tree.del(node.getPtr(idx + 1))
-		nodeReplace2Kid(newBnode, node, idx, tree.newBTree(merged), merged.getKey(0))
+		nodeReplace2Kid(newBnode, node, idx, tree.newBNode(merged), merged.getKey(0))
 	case mergeDir == 0 && updated.nKeys() == 0:
 		if !(node.nKeys() == 1 && idx == 0) {
 			panic("")

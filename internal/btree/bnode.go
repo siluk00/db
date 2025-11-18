@@ -28,10 +28,10 @@ func init() {
 }
 
 type BTree struct {
-	root     uint64
-	get      func(uint64) []byte
-	newBTree func([]byte) uint64
-	del      func(uint64)
+	root     uint64              //Pointer to root
+	get      func(uint64) []byte //get page from pointer
+	newBNode func([]byte) uint64 //allocate a pointer to page
+	del      func(uint64)        //deallocate a page
 }
 
 // Btypes Node or leaf
@@ -156,7 +156,6 @@ func leafInsert(newBNode, oldBNode BNode, idx uint16, key, val []byte) {
 	nodeAppendRange(newBNode, oldBNode, 0, 0, idx)
 	nodeAppendKV(newBNode, idx, 0, key, val)
 	nodeAppendRange(newBNode, oldBNode, idx+1, idx, oldBNode.nKeys()-idx)
-
 }
 
 // sets child pointer for BNODE_NODE
@@ -172,7 +171,7 @@ func nodeAppendKV(newBNode BNode, idx uint16, ptr uint64, key, val []byte) {
 	newBNode.setOffset(idx+1, uint16(newBNode.getOffset(idx)+4+uint16((len(key)+len(val)))))
 }
 
-// appends a range of
+// appends a range of n KV from oldBnode to newBnode strarting from srcOld
 func nodeAppendRange(newBNode, oldBNode BNode, dstNew, srcOld, n uint16) {
 	if n == 0 {
 		return
@@ -209,15 +208,73 @@ func nodeAppendKidN(tree *BTree, newBNode, oldBNode BNode, idx uint16, kids ...B
 	newBNode.setHeader(BNODE_NODE, oldBNode.nKeys()+inc-1)
 	nodeAppendRange(newBNode, oldBNode, 0, 0, idx)
 	for i, node := range kids {
-		nodeAppendKV(newBNode, idx+uint16(i), tree.newBTree(node), node.getKey(0), nil)
+		nodeAppendKV(newBNode, idx+uint16(i), tree.newBNode(node), node.getKey(0), nil)
 	}
 	nodeAppendRange(newBNode, oldBNode, idx+inc, idx+1, oldBNode.nKeys()-(idx+1))
 }
 
+// review
 func nodeSplit2(left BNode, right BNode, old BNode) {
+	nKeys := old.nKeys()
 
+	// Find the optimal split point
+	splitIdx := uint16(0)
+	totalSize := old.nBytes()
+	targetSize := totalSize / 2
+
+	// Calculate cumulative sizes to find the best split point
+	currentSize := uint16(0)
+	for i := uint16(0); i < nKeys; i++ {
+		keySize := uint16(len(old.getKey(i)))
+		valSize := uint16(len(old.getVal(i)))
+		kvSize := 4 + keySize + valSize // 4 bytes for keyLen + valLen
+
+		if currentSize+kvSize > targetSize && i > 0 {
+			splitIdx = i
+			break
+		}
+		currentSize += kvSize
+	}
+
+	// If we didn't find a good split point, split in the middle
+	if splitIdx == 0 {
+		splitIdx = nKeys / 2
+	}
+
+	// Ensure we have at least one key in each split
+	if splitIdx == 0 {
+		splitIdx = 1
+	}
+	if splitIdx == nKeys {
+		splitIdx = nKeys - 1
+	}
+
+	// Copy data to left and right nodes
+	left.setHeader(old.bType(), splitIdx)
+	right.setHeader(old.bType(), nKeys-splitIdx)
+
+	// Copy the appropriate ranges
+	if old.bType() == BNODE_LEAF {
+		nodeAppendRange(left, old, 0, 0, splitIdx)
+		nodeAppendRange(right, old, 0, splitIdx, nKeys-splitIdx)
+	} else {
+		// For internal nodes, copy child pointers
+		for i := uint16(0); i < splitIdx; i++ {
+			left.setPtr(i, old.getPtr(i))
+			key := old.getKey(i)
+			val := old.getVal(i)
+			nodeAppendKV(left, i, old.getPtr(i), key, val)
+		}
+		for i := splitIdx; i < nKeys; i++ {
+			right.setPtr(i-splitIdx, old.getPtr(i))
+			key := old.getKey(i)
+			val := old.getVal(i)
+			nodeAppendKV(right, i-splitIdx, old.getPtr(i), key, val)
+		}
+	}
 }
 
+// Splits the old Bnode into 1, 2, or 3 Bnodes, and returns the splitten nodes together with the number of nodes
 func nodeSplit3(old BNode) (uint16, [3]BNode) {
 	if old.nBytes() <= BTREE_PAGE_SIZE {
 		old = old[:BTREE_PAGE_SIZE]
@@ -243,6 +300,7 @@ func nodeSplit3(old BNode) (uint16, [3]BNode) {
 	return 3, [3]BNode{left, middle, right}
 }
 
+// Inserts
 func treeInsert(tree *BTree, node BNode, key, val []byte) BNode {
 	newBNode := BNode(make([]byte, 2*BTREE_PAGE_SIZE))
 
@@ -264,7 +322,14 @@ func treeInsert(tree *BTree, node BNode, key, val []byte) BNode {
 	return newBNode
 }
 
-func leafUpdate(newBNode, node BNode, idx uint16, key, val []byte) {}
+// TODO: change leaf update
+// leafUpdate copies everything from node to newBnode, but, it updates the value on key passed
+func leafUpdate(newBNode, node BNode, idx uint16, key, val []byte) {
+	newBNode.setHeader(BNODE_LEAF, node.nKeys())
+	nodeAppendRange(newBNode, node, 0, 0, idx)
+	nodeAppendKV(newBNode, idx, 0, key, val)
+	nodeAppendRange(newBNode, node, idx+1, idx+1, node.nKeys()-(idx+1))
+}
 
 func nodeInsert(tree *BTree, newBNode, node BNode, idx uint16, key, val []byte) {
 	kptr := node.getPtr(idx)
@@ -274,4 +339,17 @@ func nodeInsert(tree *BTree, newBNode, node BNode, idx uint16, key, val []byte) 
 	nodeReplaceKidN(tree, newBNode, node, idx, split[:nsplit]...)
 }
 
-func nodeReplaceKidN(tree *BTree, newBNode, oldBNode BNode, idx uint16, kids ...BNode) {}
+func nodeReplaceKidN(tree *BTree, newBNode, oldBNode BNode, idx uint16, kids ...BNode) {
+	newBNode.setHeader(BNODE_NODE, oldBNode.nKeys()+uint16(len(kids))-1)
+
+	// Copy nodes before the replacement point
+	nodeAppendRange(newBNode, oldBNode, 0, 0, idx)
+
+	// Insert the new kids
+	for i, kid := range kids {
+		nodeAppendKV(newBNode, idx+uint16(i), tree.newBNode(kid), kid.getKey(0), nil)
+	}
+
+	// Copy nodes after the replacement point
+	nodeAppendRange(newBNode, oldBNode, idx+uint16(len(kids)), idx+1, oldBNode.nKeys()-(idx+1))
+}
