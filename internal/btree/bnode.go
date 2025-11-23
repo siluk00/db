@@ -28,10 +28,10 @@ func init() {
 }
 
 type BTree struct {
-	root     uint64              //Pointer to root
-	get      func(uint64) []byte //get page from pointer
-	newBNode func([]byte) uint64 //allocate a pointer to page
-	del      func(uint64)        //deallocate a page
+	root     uint64                       //Pointer to root
+	get      func(uint64) []byte          //get page from pointer
+	newBNode func([]byte) (uint64, error) //allocate a pointer to page
+	del      func(uint64)                 //deallocate a page
 }
 
 // Btypes Node or leaf
@@ -131,7 +131,7 @@ func (node BNode) nBytes() uint16 {
 }
 
 // TODO: Binary Search
-// Searches for key child inside BNode, returns the first child node whose range intersects key
+// Searches for key child inside BNode, returns the index of first child node whose range intersects key
 func nodeLookupLE(node BNode, key []byte) uint16 {
 	nKeys := node.nKeys()
 	found := uint16(0)
@@ -148,6 +148,26 @@ func nodeLookupLE(node BNode, key []byte) uint16 {
 	}
 
 	return found
+}
+
+func nodeLookupE(node BNode, key []byte) (uint16, bool) {
+	nKeys := node.nKeys()
+	found := uint16(0)
+	ok := false
+
+	for i := uint16(1); i < nKeys; i++ {
+		cmp := bytes.Compare(node.getKey(i), key)
+		if cmp == 0 {
+			found = i
+			ok = true
+		}
+
+		if cmp >= 0 {
+			break
+		}
+	}
+
+	return found, ok
 }
 
 // adds new kv inside a leaf
@@ -208,7 +228,11 @@ func nodeAppendKidN(tree *BTree, newBNode, oldBNode BNode, idx uint16, kids ...B
 	newBNode.setHeader(BNODE_NODE, oldBNode.nKeys()+inc-1)
 	nodeAppendRange(newBNode, oldBNode, 0, 0, idx)
 	for i, node := range kids {
-		nodeAppendKV(newBNode, idx+uint16(i), tree.newBNode(node), node.getKey(0), nil)
+		nodeNode, err := tree.newBNode(node)
+		if err != nil {
+			panic("")
+		}
+		nodeAppendKV(newBNode, idx+uint16(i), nodeNode, node.getKey(0), nil)
 	}
 	nodeAppendRange(newBNode, oldBNode, idx+inc, idx+1, oldBNode.nKeys()-(idx+1))
 }
@@ -347,7 +371,11 @@ func nodeReplaceKidN(tree *BTree, newBNode, oldBNode BNode, idx uint16, kids ...
 
 	// Insert the new kids
 	for i, kid := range kids {
-		nodeAppendKV(newBNode, idx+uint16(i), tree.newBNode(kid), kid.getKey(0), nil)
+		kidNode, err := tree.newBNode(kid)
+		if err != nil {
+			panic("")
+		}
+		nodeAppendKV(newBNode, idx+uint16(i), kidNode, kid.getKey(0), nil)
 	}
 
 	// Copy nodes after the replacement point

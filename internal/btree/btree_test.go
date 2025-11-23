@@ -1,8 +1,11 @@
 package btree
 
 import (
+	"fmt"
 	"testing"
 	"unsafe"
+
+	"github.com/stretchr/testify/assert"
 )
 
 type C struct {
@@ -22,16 +25,16 @@ func newC() *C {
 				}
 				return node
 			},
-			newBNode: func(node []byte) uint64 {
-				if !(BNode(node).nBytes() <= BTREE_PAGE_SIZE) {
-					panic("page too large")
+			newBNode: func(node []byte) (uint64, error) {
+				if BNode(node).nBytes() > BTREE_PAGE_SIZE {
+					return 0, fmt.Errorf("")
 				}
 				ptr := uint64(uintptr(unsafe.Pointer(&node[0])))
-				if !(pages[ptr] == nil) {
-					panic("page already exists")
+				if pages[ptr] != nil {
+					return 0, fmt.Errorf("")
 				}
 				pages[ptr] = node
-				return ptr
+				return ptr, nil
 			},
 			del: func(ptr uint64) {
 				if !(pages[ptr] != nil) {
@@ -48,17 +51,20 @@ func newC() *C {
 func TestTreeBasic(t *testing.T) {
 	c := newC()
 
-	ok := c.tree.Delete([]byte("nonexistent")) 
-	testify.
+	// Nothing to delete yet
+	ok := c.tree.Delete([]byte("nonexistent"))
+	assert.False(t, ok)
 
-	// Test first insertion
+	// Test Insertion
 	c.tree.Insert([]byte("key1"), []byte("value1"))
 	c.ref["key1"] = "value1"
-
-	// Verify tree structure
-	if c.tree.root == 0 {
-		t.Fatal("Root should be set after insertion")
-	}
+	assert.NotEqual(t, 0, c.tree.root)
+	val, ok := c.tree.Get([]byte("key1"))
+	assert.True(t, ok)
+	assert.Equal(t, []byte("value1"), val)
+	val, ok = c.tree.Get([]byte("key2"))
+	assert.False(t, ok)
+	assert.Nil(t, val)
 
 	// Test duplicate key insertion (update)
 	c.tree.Insert([]byte("key1"), []byte("value1_updated"))

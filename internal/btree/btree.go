@@ -1,8 +1,13 @@
 package btree
 
-import "bytes"
+import (
+	"bytes"
+	"fmt"
+)
 
+// Inserts key, val into BTree
 func (tree *BTree) Insert(key, val []byte) {
+	// If BTree is empty insert a dummy key plus the key, val passed as parameters
 	if tree.root == 0 {
 		root := BNode(make([]byte, BTREE_PAGE_SIZE))
 		root.setHeader(BNODE_LEAF, 2)
@@ -11,7 +16,11 @@ func (tree *BTree) Insert(key, val []byte) {
 		//thus lookup can always find a containing node
 		nodeAppendKV(root, 0, 0, nil, nil)
 		nodeAppendKV(root, 1, 0, key, val)
-		tree.root = tree.newBNode(root)
+		var err error
+		tree.root, err = tree.newBNode(root)
+		if err != nil {
+			panic("")
+		}
 		return
 	}
 
@@ -23,13 +32,25 @@ func (tree *BTree) Insert(key, val []byte) {
 		root.setHeader(BNODE_NODE, nsplit)
 
 		for i, knode := range split[:nsplit] {
-			ptr, key := tree.newBNode(knode), knode.getKey(0)
+			ptr, err := tree.newBNode(knode)
+			if err != nil {
+				panic("")
+			}
+			key := knode.getKey(0)
 			nodeAppendKV(root, uint16(i), ptr, key, nil)
 		}
 
-		tree.root = tree.newBNode(root)
+		var err error
+		tree.root, err = tree.newBNode(root)
+		if err != nil {
+			panic("")
+		}
 	} else {
-		tree.root = tree.newBNode(split[0])
+		var err error
+		tree.root, err = tree.newBNode(split[0])
+		if err != nil {
+			panic("")
+		}
 	}
 }
 
@@ -50,10 +71,45 @@ func (tree *BTree) Delete(key []byte) bool {
 		// Tree became empty
 		tree.root = 0
 	} else {
-		tree.root = tree.newBNode(updated)
+		var err error
+		tree.root, err = tree.newBNode(updated)
+		if err != nil {
+			panic("")
+		}
 	}
 
 	return true
+}
+
+// Gets the val for the key, returns true if key is found
+func (tree *BTree) Get(key []byte) ([]byte, bool) {
+	root := BNode(tree.get(tree.root))
+	idx := nodeLookupLE(root, key)
+	fmt.Println(string(key), idx)
+
+	if root.bType() == BNODE_LEAF {
+		idx, ok := nodeLookupE(root, key)
+		if ok {
+			return root.getVal(idx), true
+		}
+		return nil, false
+	}
+
+	offset := BNode(root).getOffset(idx)
+	node := BNode(tree.get(uint64(offset)))
+
+	for node.bType() == BNODE_NODE {
+		idx = nodeLookupLE(node, key)
+		offset = BNode(node).getOffset(idx)
+		node = BNode(tree.get(uint64(offset)))
+	}
+
+	idx = nodeLookupLE(node, key)
+	if idx == 0 {
+		return nil, false
+	}
+
+	return node.getVal(idx), true
 }
 
 // remove a key from a leaf node
@@ -155,12 +211,20 @@ func nodeDelete(tree *BTree, node BNode, idx uint16, key []byte) BNode {
 		merged := BNode(make([]byte, BTREE_PAGE_SIZE))
 		nodeMerge(merged, sibling, updated)
 		tree.del(node.getPtr(idx - 1))
-		nodeReplace2Kid(newBnode, node, idx-1, tree.newBNode(merged), merged.getKey(0))
+		mergedBNode, err := tree.newBNode(merged)
+		if err != nil {
+			panic("")
+		}
+		nodeReplace2Kid(newBnode, node, idx-1, mergedBNode, merged.getKey(0))
 	case mergeDir > 0:
 		merged := BNode(make([]byte, BTREE_PAGE_SIZE))
 		nodeMerge(merged, updated, sibling)
 		tree.del(node.getPtr(idx + 1))
-		nodeReplace2Kid(newBnode, node, idx, tree.newBNode(merged), merged.getKey(0))
+		mergedBNode, err := tree.newBNode(merged)
+		if err != nil {
+			panic("")
+		}
+		nodeReplace2Kid(newBnode, node, idx, mergedBNode, merged.getKey(0))
 	case mergeDir == 0 && updated.nKeys() == 0:
 		if !(node.nKeys() == 1 && idx == 0) {
 			panic("")
