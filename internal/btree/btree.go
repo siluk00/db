@@ -2,7 +2,6 @@ package btree
 
 import (
 	"bytes"
-	"fmt"
 )
 
 // Inserts key, val into BTree
@@ -85,7 +84,7 @@ func (tree *BTree) Delete(key []byte) bool {
 func (tree *BTree) Get(key []byte) ([]byte, bool) {
 	root := BNode(tree.get(tree.root))
 	idx := nodeLookupLE(root, key)
-	fmt.Println(string(key), idx)
+	//fmt.Println(string(key), idx)
 
 	if root.bType() == BNODE_LEAF {
 		idx, ok := nodeLookupE(root, key)

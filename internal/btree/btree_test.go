@@ -2,6 +2,7 @@ package btree
 
 import (
 	"fmt"
+	"log"
 	"testing"
 	"unsafe"
 
@@ -55,7 +56,7 @@ func TestTreeBasic(t *testing.T) {
 	ok := c.tree.Delete([]byte("nonexistent"))
 	assert.False(t, ok)
 
-	// Test Insertion
+	// Test First Insertion
 	c.tree.Insert([]byte("key1"), []byte("value1"))
 	c.ref["key1"] = "value1"
 	assert.NotEqual(t, 0, c.tree.root)
@@ -69,19 +70,28 @@ func TestTreeBasic(t *testing.T) {
 	// Test duplicate key insertion (update)
 	c.tree.Insert([]byte("key1"), []byte("value1_updated"))
 	c.ref["key1"] = "value1_updated"
+	val, ok = c.tree.Get([]byte("key1"))
+	assert.True(t, ok)
+	assert.Equal(t, []byte("value1_updated"), val)
 
 	// Test multiple insertions
 	c.tree.Insert([]byte("key2"), []byte("value2"))
 	c.tree.Insert([]byte("key0"), []byte("value0"))
 	c.ref["key2"] = "value2"
 	c.ref["key0"] = "value0"
+	val, ok = c.tree.Get([]byte("key2"))
+	assert.True(t, ok)
+	assert.Equal(t, []byte("value2"), val)
+	val, ok = c.tree.Get([]byte("key0"))
+	assert.True(t, ok)
+	assert.Equal(t, []byte("value0"), val)
 
 	// Verify all pages are valid
-	for ptr, node := range c.pages {
-		if node.nBytes() > BTREE_PAGE_SIZE {
-			t.Fatalf("Page %d exceeds size limit: %d > %d", ptr, node.nBytes(), BTREE_PAGE_SIZE)
-		}
+	for _, node := range c.pages {
+		assert.Less(t, int(node.nBytes()), BTREE_PAGE_SIZE)
 	}
+
+	log.Println(BNode(c.tree.get(c.tree.root)).nKeys())
 }
 
 func TestTreeDelete(t *testing.T) {
