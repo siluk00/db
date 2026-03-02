@@ -1,10 +1,15 @@
 package btree
 
-import "syscall"
+import (
+	"fmt"
+	"os"
+	"path"
+	"syscall"
+)
 
 type KV struct {
 	Path string //file name
-	fd   int
+	fd   int // file descriptor
 	tree BTree
 }
 
@@ -52,4 +57,26 @@ func writePages(db *KV) error {
 
 func updateRoot(db *KV) error {
 	return nil
+}
+
+func createFileSync(file string) (int, error) {
+	flags := os.O_RDONLY | syscall.O_DIRECTORY
+	dirfd, err := syscall.Open(path.Dir(file), flags, 0o644)
+	if err != nil {
+		return -1, fmt.Errorf("open directory: %w", err)
+	}
+	defer syscall.Close(dirfd)
+
+	flags = os.O_RDWR | os.O_CREATE
+	fd, err := syscall.Openat(dirfd, path.Base(file), flags, 0o644)
+	if err != nil {
+		return -1, fmt.Errorf("open file: %w", err)
+	}
+
+	if err = syscall.Fsync(dirfd); err != nil {
+		_ = syscall.Close(fd)
+		return -1, fmt.Errorf("fsync directory: %w", err)
+	}
+
+	return fd, nil
 }

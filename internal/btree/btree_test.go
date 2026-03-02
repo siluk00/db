@@ -50,6 +50,7 @@ func newC() *C {
 }
 
 func TestTreeBasic(t *testing.T) {
+	t.Helper()
 	c := newC()
 
 	// Nothing to delete yet
@@ -95,6 +96,7 @@ func TestTreeBasic(t *testing.T) {
 }
 
 func TestTreeDelete(t *testing.T) {
+	t.Helper()
 	c := newC()
 
 	// Insert test data
