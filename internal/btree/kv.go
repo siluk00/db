@@ -9,11 +9,22 @@ import (
 
 type KV struct {
 	Path string //file name
-	fd   int // file descriptor
+	fd   int    // file descriptor
 	tree BTree
+	mmap struct {
+		total  int
+		chunks [][]byte
+	}
+	page struct {
+		flushed uint64
+		temp    [][]byte
+	}
 }
 
 func (db *KV) Open() error {
+	db.tree.get = db.pageRead
+	db.tree.newBNode = db.pageAppend
+	db.tree.del = func(uint64) {}
 	return nil
 }
 
@@ -79,4 +90,43 @@ func createFileSync(file string) (int, error) {
 	}
 
 	return fd, nil
+}
+
+func (db *KV) pageRead(ptr uint64) []byte {
+	start := uint64(0)
+
+	for _, chunk := range db.mmap.chunks {
+		end := start + uint64(len(chunk))/BTREE_PAGE_SIZE
+		if ptr < end {
+			offset := BTREE_PAGE_SIZE * (ptr - start)
+			return chunk[offset : offset+BTREE_PAGE_SIZE]
+		}
+		start = end
+	}
+
+	panic("bad pointer")
+}
+
+func extendMap(db *KV, size int) error {
+	if size <= db.mmap.total {
+		return nil
+	}
+
+	alloc := max(db.mmap.total, 64<<20)
+	for db.mmap.total+alloc < size {
+		alloc *= 2
+	}
+
+	chunk, err := syscall.Mmap(db.fd, int64(db.mmap.total), alloc, syscall.PROT_READ, syscall.MAP_SHARED)
+	if err != nil {
+		return fmt.Errorf("mmap: %w", err)
+	}
+
+	db.mmap.total += alloc
+	db.mmap.chunks = append(db.mmap.chunks, chunk)
+	return nil
+}
+
+func (db *KV) pageAppend(node []byte) (uint64, error) {
+	return uint64(0), nil
 }
