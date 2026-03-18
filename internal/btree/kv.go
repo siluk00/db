@@ -5,6 +5,8 @@ import (
 	"os"
 	"path"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 type KV struct {
@@ -12,15 +14,16 @@ type KV struct {
 	fd   int    // file descriptor
 	tree BTree
 	mmap struct {
-		total  int
-		chunks [][]byte
+		total  int      //mmap size
+		chunks [][]byte //multiple mmaps, can be non-continuous
 	}
 	page struct {
-		flushed uint64
-		temp    [][]byte
+		flushed uint64   //number of pages
+		temp    [][]byte //newly allocated pages
 	}
 }
 
+// initialize KV store struct
 func (db *KV) Open() error {
 	db.tree.get = db.pageRead
 	db.tree.newBNode = db.pageAppend
@@ -28,15 +31,18 @@ func (db *KV) Open() error {
 	return nil
 }
 
+// wrapper funtion  for getting value for ky, returns true if key exists
 func (db *KV) Get(key []byte) ([]byte, bool) {
 	return db.tree.Get(key)
 }
 
+// wrapper function to Insert key and value on Btree
 func (db *KV) Set(key []byte, val []byte) error {
 	db.tree.Insert(key, val)
 	return updateFile(db)
 }
 
+// deletes key and value for giveen key, returns true if value exists
 func (db *KV) Del(key []byte) (bool, error) {
 	deleted := db.tree.Delete(key)
 	return deleted, updateFile(db)
@@ -63,6 +69,22 @@ func updateFile(db *KV) error {
 }
 
 func writePages(db *KV) error {
+	//extending the map if needed
+	size := ((int)(db.page.flushed) + len(db.page.temp)) * BTREE_PAGE_SIZE
+	if err := extendMap(db, size); err != nil {
+		return err
+	}
+
+	//write the pages to file
+	offset := int64(db.page.flushed * BTREE_PAGE_SIZE)
+	if _, err := unix.Pwritev(db.fd, db.page.temp, offset); err != nil {
+		return err
+	}
+
+	//discard memory data
+	db.page.flushed += uint64(len(db.page.temp))
+	db.page.temp = db.page.temp[:0]
+
 	return nil
 }
 
@@ -92,14 +114,14 @@ func createFileSync(file string) (int, error) {
 	return fd, nil
 }
 
-func (db *KV) pageRead(ptr uint64) []byte {
+func (db *KV) pageRead(ptr uint64) []byte { // get method from BTree
 	start := uint64(0)
 
 	for _, chunk := range db.mmap.chunks {
-		end := start + uint64(len(chunk))/BTREE_PAGE_SIZE
+		end := start + uint64(len(chunk))/BTREE_PAGE_SIZE // end-start = amount of pages
 		if ptr < end {
-			offset := BTREE_PAGE_SIZE * (ptr - start)
-			return chunk[offset : offset+BTREE_PAGE_SIZE]
+			offset := BTREE_PAGE_SIZE * (ptr - start)     // size of pages times the amount of page, calculate the offset where the page is
+			return chunk[offset : offset+BTREE_PAGE_SIZE] // returns the page in the pointer ptr
 		}
 		start = end
 	}
@@ -107,14 +129,15 @@ func (db *KV) pageRead(ptr uint64) []byte {
 	panic("bad pointer")
 }
 
+// database + current size of database
 func extendMap(db *KV, size int) error {
 	if size <= db.mmap.total {
 		return nil
 	}
 
-	alloc := max(db.mmap.total, 64<<20)
+	alloc := max(db.mmap.total, 64<<20) //double the current address space
 	for db.mmap.total+alloc < size {
-		alloc *= 2
+		alloc *= 2 // still not enough?
 	}
 
 	chunk, err := syscall.Mmap(db.fd, int64(db.mmap.total), alloc, syscall.PROT_READ, syscall.MAP_SHARED)
@@ -127,6 +150,8 @@ func extendMap(db *KV, size int) error {
 	return nil
 }
 
-func (db *KV) pageAppend(node []byte) (uint64, error) {
-	return uint64(0), nil
+func (db *KV) pageAppend(node []byte) (uint64, error) { // newBNode function for the tree
+	ptr := db.page.flushed + uint64(len(db.page.temp)) // amount of pages on Btree + amount of temp pages
+	db.page.temp = append(db.page.temp, node)          // append to temp
+	return ptr, nil
 }
