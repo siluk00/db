@@ -1,6 +1,7 @@
 package btree
 
 import (
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path"
@@ -8,6 +9,8 @@ import (
 
 	"golang.org/x/sys/unix"
 )
+
+const DB_SIG = "DB6"
 
 type KV struct {
 	Path string //file name
@@ -88,6 +91,20 @@ func writePages(db *KV) error {
 	return nil
 }
 
+func readRoot(db *KV, fileSize int64) error {
+	if fileSize == 0 {
+		db.page.flushed = 1 //the meta page is initialized on the first page
+		return nil
+	}
+
+	//read the page
+	data := db.mmap.chunks[0]
+	loadMeta(db, data)
+	//verify the page
+
+	return nil
+}
+
 func updateRoot(db *KV) error {
 	return nil
 }
@@ -154,4 +171,22 @@ func (db *KV) pageAppend(node []byte) (uint64, error) { // newBNode function for
 	ptr := db.page.flushed + uint64(len(db.page.temp)) // amount of pages on Btree + amount of temp pages
 	db.page.temp = append(db.page.temp, node)          // append to temp
 	return ptr, nil
+}
+
+func saveMeta(db *KV) []byte {
+	var data [32]byte
+	copy(data[:16], []byte(DB_SIG))
+	binary.LittleEndian.PutUint64(data[16:], db.tree.root)
+	binary.LittleEndian.PutUint64(data[24:], db.page.flushed)
+	return data[:]
+}
+
+func loadMeta(db *KV, data []byte) {
+	sig := string(data[:16])
+	if sig != DB_SIG {
+		panic("invalid database signature")
+	}
+
+	db.tree.root = binary.LittleEndian.Uint64(data[16:24])
+	db.page.flushed = binary.LittleEndian.Uint64(data[24:32])
 }
