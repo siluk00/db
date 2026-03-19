@@ -24,6 +24,7 @@ type KV struct {
 		flushed uint64   //number of pages
 		temp    [][]byte //newly allocated pages
 	}
+	failed bool
 }
 
 // initialize KV store struct
@@ -41,8 +42,26 @@ func (db *KV) Get(key []byte) ([]byte, bool) {
 
 // wrapper function to Insert key and value on Btree
 func (db *KV) Set(key []byte, val []byte) error {
+	meta := saveMeta(db)
 	db.tree.Insert(key, val)
-	return updateFile(db)
+	return updateOrRevert(db, meta)
+}
+
+func updateOrRevert(db *KV, meta []byte) error {
+	if db.failed {
+		db.failed = false
+	}
+
+	err := updateFile(db)
+
+	if err != nil {
+		db.failed = true
+		loadMeta(db, meta)
+		db.page.temp = db.page.temp[:0]
+	}
+
+	return err
+
 }
 
 // deletes key and value for giveen key, returns true if value exists
@@ -101,11 +120,16 @@ func readRoot(db *KV, fileSize int64) error {
 	data := db.mmap.chunks[0]
 	loadMeta(db, data)
 	//verify the page
+	//TODO
 
 	return nil
 }
 
 func updateRoot(db *KV) error {
+	if _, err := syscall.Pwrite(db.fd, saveMeta(db), 0); err != nil {
+		return fmt.Errorf("write meta page: %w", err)
+	}
+
 	return nil
 }
 
