@@ -4,6 +4,17 @@ import (
 	"bytes"
 )
 
+// The methods are inside the struct to isolate what the BTree is able to do
+// The tree knows nothing about Writing to file, it isolates the mathematical structure
+// it's not an interface so it's possible to inject closures inside transactions (modify the function so that it has a different behavior)
+// and the reason of granularity, it's not neeeded to implement them all
+type BTree struct {
+	root     uint64                       //Pointer to root
+	get      func(uint64) []byte          //get page from pointer
+	newBNode func([]byte) (uint64, error) //allocate a pointer to page
+	del      func(uint64)                 //deallocate a page
+}
+
 // Inserts key, val into BTree
 func (tree *BTree) Insert(key, val []byte) {
 	// If BTree is empty insert a dummy key plus the key, val passed as parameters
@@ -13,6 +24,9 @@ func (tree *BTree) Insert(key, val []byte) {
 
 		//dummy key, so the tree covers the whole key space
 		//thus lookup can always find a containing node
+		// in the case the value to be inserted is less than the key, it's like setting -\infty
+		// nil pointeer is smaller than any number soit's like having [-\infty, 10, 20, 30]
+		// the dummy key is the smallest possible node
 		nodeAppendKV(root, 0, 0, nil, nil)
 		nodeAppendKV(root, 1, 0, key, val)
 		var err error

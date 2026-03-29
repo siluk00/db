@@ -8,6 +8,13 @@ import (
 // header consists of bNode + number of Keys
 const HEADER = 4
 
+// type 	// nkeys	// pointers		//offsets	// key-values	//unused
+// 2B		2B			nKeys * 8B		nKeys*2B
+// for each kv pair
+// klen	//vlen	//key	//val
+// 2B	//2B
+// pointers -> child pointers (byte offset)
+// offsets -> take you right to the klen (not global, it's irt the end of offsets)
 type BNode []byte
 
 // bType types
@@ -25,13 +32,6 @@ func init() {
 	if !(node1max <= BTREE_PAGE_SIZE) {
 		panic("node1max larger than page size")
 	}
-}
-
-type BTree struct {
-	root     uint64                       //Pointer to root
-	get      func(uint64) []byte          //get page from pointer
-	newBNode func([]byte) (uint64, error) //allocate a pointer to page
-	del      func(uint64)                 //deallocate a page
 }
 
 // Btypes Node or leaf
@@ -60,13 +60,13 @@ func (node BNode) getPtr(idx uint16) uint64 {
 	return binary.LittleEndian.Uint64(node[pos:])
 }
 
-// Sets the pointer to child
+// Sets the pointer to child node where idx represents the offset of the child node beginning at zero
 func (node BNode) setPtr(idx uint16, val uint64) {
 	pos := HEADER + 8*idx
 	binary.LittleEndian.PutUint64(node[pos:], val)
 }
 
-// helper function for getOffset in case index != 0
+// returns offset position of idx in case it's not zero
 func offsetPos(node BNode, idx uint16) uint16 {
 	if !(1 <= idx && idx <= node.nKeys()) {
 		panic("")
@@ -89,16 +89,16 @@ func (node BNode) getOffset(idx uint16) uint16 {
 // Sets the offset of idx to offset
 func (node BNode) setOffset(idx, offset uint16) {
 	if idx == 0 || idx > node.nKeys() {
-		panic("")
+		panic("invalid index")
 	}
 
 	binary.LittleEndian.PutUint16(node[offsetPos(node, idx):], offset)
 }
 
-// Returns the position in wich the kv is stored on BNode based on idx
+// Calculates the position of the index demanded or the offseet where the node begins
 func (node BNode) kvPos(idx uint16) uint16 {
-	if !(idx <= node.nKeys()) {
-		panic("")
+	if idx > node.nKeys() {
+		panic("index greater than number of keys")
 	}
 
 	return HEADER + 8*node.nKeys() + 2*node.nKeys() + node.getOffset(idx)
@@ -178,8 +178,11 @@ func leafInsert(newBNode, oldBNode BNode, idx uint16, key, val []byte) {
 	nodeAppendRange(newBNode, oldBNode, idx+1, idx, oldBNode.nKeys()-idx)
 }
 
-// sets child pointer for BNODE_NODE
-// sets key/value to position pointed by offset and sets offset of the next kv for BNODE_LEAF
+// sets child pointer for BNODE_NODE to ptr
+// sets key/value to position pointed by idx inside BNode
+// idx represents the index inside BNode
+// pointers are page number inside the Btree (byte offsets)
+// a zero pointer is just a pointer to nil (leaf nodes)
 func nodeAppendKV(newBNode BNode, idx uint16, ptr uint64, key, val []byte) {
 	newBNode.setPtr(idx, uint64(ptr))
 	pos := newBNode.kvPos(idx)
