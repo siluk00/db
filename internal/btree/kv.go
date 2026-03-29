@@ -16,6 +16,7 @@ type KV struct {
 	Path string //file name
 	fd   int    // file descriptor
 	tree BTree
+	free FreeList
 	mmap struct {
 		total  int      //mmap size
 		chunks [][]byte //multiple mmaps, can be non-continuous
@@ -27,7 +28,7 @@ type KV struct {
 	failed bool
 }
 
-// initialize KV store struct
+// initialize KV store tree struct
 func (db *KV) Open() error {
 	db.tree.get = db.pageRead
 	db.tree.newBNode = db.pageAppend
@@ -35,7 +36,7 @@ func (db *KV) Open() error {
 	return nil
 }
 
-// wrapper funtion  for getting value for ky, returns true if key exists
+// wrapper funtion  for getting value for key, returns true if key exists
 func (db *KV) Get(key []byte) ([]byte, bool) {
 	return db.tree.Get(key)
 }
@@ -140,6 +141,7 @@ func updateRoot(db *KV) error {
 	return nil
 }
 
+// creates the file that will hold the database
 func createFileSync(file string) (int, error) {
 	// getting syscall open for safety against directory renaming, and to use it in the next suyscalls
 	// and also to ensure the file string passed is really a directory
@@ -188,8 +190,8 @@ func extendMap(db *KV, size int) error {
 		return nil
 	}
 
-	alloc := max(db.mmap.total, 64<<20) //double the current address space
-	for db.mmap.total+alloc < size {
+	alloc := max(db.mmap.total, 64<<20) // 64Mb each time
+	for db.mmap.total+alloc < size {    //double the current address space
 		alloc *= 2 // still not enough?
 	}
 
@@ -230,4 +232,43 @@ func loadMeta(db *KV, data []byte) {
 
 	db.tree.root = binary.LittleEndian.Uint64(data[16:24])
 	db.page.flushed = binary.LittleEndian.Uint64(data[24:32])
+}
+
+// Node format
+// |next	|pointers	|unused	|
+// | 8B		| n*8B		| ...	|
+type LNode []byte
+
+const FREE_LIST_HEADER = 8
+const FREE_LIST_CAP = (BTREE_PAGE_SIZE - FREE_LIST_HEADER) / 8
+
+func (node LNode) getNext() uint64
+func (node LNode) setNext(next uint64)
+func (node LNode) getPtr(idx int) uint64
+func (node LNode) setPtr(idx int, ptr uint64)
+
+type FreeList struct {
+	get         func(uint64) []byte // read a page
+	newFreeList func([]byte) uint64 // apend a new page
+	set         func(uint64) []byte // update a page
+
+	headPage uint64 //pointer to list head node
+	headSeq  uint64 // monotonic sequence number to index into the list head
+	tailPage uint64
+	tailSeq  uint64
+
+	//in memory states
+	maxSeq uint64 //saved tailSeqto prevent consuming newly added items
+}
+
+func (f1 *FreeList) PopHead() uint64
+func (f1 *FreeList) PushTail(ptr uint64)
+
+func seq2idx(seq uint64) int {
+	return int(seq % FREE_LIST_CAP)
+}
+
+// make the newly added items available for consumption
+func (fl *FreeList) SetMaxSeq() {
+	fl.maxSeq = fl.tailSeq
 }
