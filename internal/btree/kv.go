@@ -22,8 +22,9 @@ type KV struct {
 		chunks [][]byte //multiple mmaps, can be non-continuous
 	}
 	page struct {
-		flushed uint64   //number of pages permanently written on disk
-		temp    [][]byte //newly allocated pages
+		flushed uint64 //number of pages permanently written on disk
+		nappend uint64
+		updates map[uint64][]btee //newly allocated pages
 	}
 	failed bool
 }
@@ -101,6 +102,47 @@ func updateFile(db *KV) error {
 	return syscall.Fsync(db.fd)
 }
 
+func (db *KV) pageAlloc(node []byte) uint64 {
+	if ptr := db.free.PopHead(); ptr != 0 { //try free list
+		db.page.updates[ptr] = node
+		return ptr
+	}
+
+	return db.pageAppend(node)
+}
+
+func (db *KV) pageWrite(ptr uint64) []byte {
+	if node, ok := db.page.updates[ptr]; ok {
+		return node
+	}
+	node := make([]byte, BTREE_PAGE_SIZE)
+	copy(node, db.pageReadFile(ptr))
+	db.page.updates[ptr] = node
+	return node
+}
+
+func (db *KV) pageRead(ptr uint64) []byte {
+	if node, ok := db.page.updates[ptr]; ok {
+		return node
+	}
+	return db.pageReadFile(ptr)
+}
+
+func (db *KV) pageReadFile(ptr uint64) []byte {
+	start := uint64(0)
+
+	for _, chunk := range db.mmap.chunks {
+		end := start + uint64(len(chunk))/BTREE_PAGE_SIZE // end-start = amount of pages
+		if ptr < end {
+			offset := BTREE_PAGE_SIZE * (ptr - start)     // size of pages times the amount of page, calculate the offset where the page is
+			return chunk[offset : offset+BTREE_PAGE_SIZE] // returns the page in the pointer ptr
+		}
+		start = end
+	}
+
+	panic("bad pointer")
+}
+
 // Write all temp files to disc
 func writePages(db *KV) error {
 	//extending the map if needed
@@ -174,21 +216,6 @@ func createFileSync(file string) (int, error) {
 	}
 
 	return fd, nil
-}
-
-func (db *KV) pageRead(ptr uint64) []byte { // get method from BTree
-	start := uint64(0)
-
-	for _, chunk := range db.mmap.chunks {
-		end := start + uint64(len(chunk))/BTREE_PAGE_SIZE // end-start = amount of pages
-		if ptr < end {
-			offset := BTREE_PAGE_SIZE * (ptr - start)     // size of pages times the amount of page, calculate the offset where the page is
-			return chunk[offset : offset+BTREE_PAGE_SIZE] // returns the page in the pointer ptr
-		}
-		start = end
-	}
-
-	panic("bad pointer")
 }
 
 // database + current size of database
