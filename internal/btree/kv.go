@@ -30,9 +30,16 @@ type KV struct {
 
 // initialize KV store tree struct
 func (db *KV) Open() error {
+	// B+ tree callbacks
 	db.tree.get = db.pageRead
-	db.tree.newBNode = db.pageAppend
-	db.tree.del = func(uint64) {}
+	db.tree.newBNode = db.pageAlloc
+	db.tree.del = db.free.PushTail
+
+	//free list callbacks
+	db.free.get = db.pageRead
+	db.free.newFreeList = db.pageAppend
+	db.free.set = db.pageWrite
+
 	return nil
 }
 
@@ -232,43 +239,4 @@ func loadMeta(db *KV, data []byte) {
 
 	db.tree.root = binary.LittleEndian.Uint64(data[16:24])
 	db.page.flushed = binary.LittleEndian.Uint64(data[24:32])
-}
-
-// Node format
-// |next	|pointers	|unused	|
-// | 8B		| n*8B		| ...	|
-type LNode []byte
-
-const FREE_LIST_HEADER = 8
-const FREE_LIST_CAP = (BTREE_PAGE_SIZE - FREE_LIST_HEADER) / 8
-
-func (node LNode) getNext() uint64
-func (node LNode) setNext(next uint64)
-func (node LNode) getPtr(idx int) uint64
-func (node LNode) setPtr(idx int, ptr uint64)
-
-type FreeList struct {
-	get         func(uint64) []byte // read a page
-	newFreeList func([]byte) uint64 // apend a new page
-	set         func(uint64) []byte // update a page
-
-	headPage uint64 //pointer to list head node
-	headSeq  uint64 // monotonic sequence number to index into the list head
-	tailPage uint64
-	tailSeq  uint64
-
-	//in memory states
-	maxSeq uint64 //saved tailSeqto prevent consuming newly added items
-}
-
-func (f1 *FreeList) PopHead() uint64
-func (f1 *FreeList) PushTail(ptr uint64)
-
-func seq2idx(seq uint64) int {
-	return int(seq % FREE_LIST_CAP)
-}
-
-// make the newly added items available for consumption
-func (fl *FreeList) SetMaxSeq() {
-	fl.maxSeq = fl.tailSeq
 }
