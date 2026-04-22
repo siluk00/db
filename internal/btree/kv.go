@@ -24,7 +24,8 @@ type KV struct {
 	page struct {
 		flushed uint64 //number of pages permanently written on disk
 		nappend uint64
-		updates map[uint64][]btee //newly allocated pages
+		updates map[uint64][]byte //newly allocated pages
+		temp    [][]byte
 	}
 	failed bool
 }
@@ -102,13 +103,13 @@ func updateFile(db *KV) error {
 	return syscall.Fsync(db.fd)
 }
 
-func (db *KV) pageAlloc(node []byte) uint64 {
+func (db *KV) pageAlloc(node []byte) (uint64, error) {
 	if ptr := db.free.PopHead(); ptr != 0 { //try free list
 		db.page.updates[ptr] = node
-		return ptr
+		return ptr, nil
 	}
 
-	return db.pageAppend(node)
+	return db.pageAppend(node), nil
 }
 
 func (db *KV) pageWrite(ptr uint64) []byte {
@@ -166,8 +167,10 @@ func writePages(db *KV) error {
 
 func readRoot(db *KV, fileSize int64) error {
 	if fileSize == 0 {
-		db.page.flushed = 1 //the meta page is initialized on the first page
-		return nil
+		db.page.flushed = 2 //the meta page is initialized on the first page and a free list node
+		db.free.headPage = 1
+		db.free.tailPage = 1
+		return nil //the meta page will be written on the first update
 	}
 
 	//read the page
@@ -242,10 +245,10 @@ func extendMap(db *KV, size int) error {
 // this is the tree.NewBNode function for KV store
 // Appends the node to db.page.temp
 // Returns the index of the new appended node
-func (db *KV) pageAppend(node []byte) (uint64, error) {
+func (db *KV) pageAppend(node []byte) uint64 {
 	ptr := db.page.flushed + uint64(len(db.page.temp)) // amount of pages on Btree already written to disc + amount of temp pages
 	db.page.temp = append(db.page.temp, node)          // append to temp
-	return ptr, nil
+	return ptr
 }
 
 // backup snapshot of operation , gets the meta from db.tree
