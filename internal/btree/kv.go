@@ -24,7 +24,8 @@ type KV struct {
 	page struct {
 		flushed uint64 //number of pages permanently written on disk
 		nappend uint64
-		updates map[uint64][]byte //newly allocated pages
+		// it holds pages that were modified
+		updates map[uint64][]byte //newly allocated pages, maps pointers to pages
 		temp    [][]byte
 	}
 	failed bool
@@ -99,10 +100,15 @@ func updateFile(db *KV) error {
 		return err
 	}
 
+	db.free.SetMaxSeq()
+
 	// make everything persistent
 	return syscall.Fsync(db.fd)
 }
 
+// if Freelist non empty then  it saves the node on the freelist head
+// then it adds pointer to updates
+// else just appends page to the end of temp
 func (db *KV) pageAlloc(node []byte) (uint64, error) {
 	if ptr := db.free.PopHead(); ptr != 0 { //try free list
 		db.page.updates[ptr] = node
@@ -112,6 +118,9 @@ func (db *KV) pageAlloc(node []byte) (uint64, error) {
 	return db.pageAppend(node), nil
 }
 
+// this is free list Set implementation
+// verify if pointer is on updates map (if yes, returns the node)
+// if not then searches on mmap structure and updates the updates map
 func (db *KV) pageWrite(ptr uint64) []byte {
 	if node, ok := db.page.updates[ptr]; ok {
 		return node
@@ -122,6 +131,10 @@ func (db *KV) pageWrite(ptr uint64) []byte {
 	return node
 }
 
+// reads the pointer and returns the page
+// verify first if page is on updates dict
+// then look for pointer on mmap structure
+// implements both Btree get and FreeList get
 func (db *KV) pageRead(ptr uint64) []byte {
 	if node, ok := db.page.updates[ptr]; ok {
 		return node
@@ -129,6 +142,7 @@ func (db *KV) pageRead(ptr uint64) []byte {
 	return db.pageReadFile(ptr)
 }
 
+// search for pointer on mmap structure and returns the page if found
 func (db *KV) pageReadFile(ptr uint64) []byte {
 	start := uint64(0)
 
@@ -173,11 +187,23 @@ func readRoot(db *KV, fileSize int64) error {
 		return nil //the meta page will be written on the first update
 	}
 
+	if fileSize < int64(BTREE_PAGE_SIZE) {
+		return fmt.Errorf("database corrupted: file size (%d) is smaller than page size", fileSize)
+	}
+
 	//read the page
 	data := db.mmap.chunks[0]
 	loadMeta(db, data)
+
 	//verify the page
-	//TODO
+	expectedSize := int64(db.page.flushed * uint64(BTREE_PAGE_SIZE))
+	if fileSize < expectedSize {
+		return fmt.Errorf("database corrupted: expected file size %d based on flushed pages, but actual size is %d", expectedSize, fileSize)
+	}
+
+	if db.tree.root >= db.page.flushed {
+		return fmt.Errorf("database corrupted: root pointer (%d) exceeds flushed pages count (%d)", db.tree.root, db.page.flushed)
+	}
 
 	return nil
 }
@@ -242,7 +268,7 @@ func extendMap(db *KV, size int) error {
 	return nil
 }
 
-// this is the tree.NewBNode function for KV store
+// this is the freeList New function for KV store
 // Appends the node to db.page.temp
 // Returns the index of the new appended node
 func (db *KV) pageAppend(node []byte) uint64 {

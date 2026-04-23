@@ -20,14 +20,18 @@ type FreeList struct {
 
 	// persisted data in the meta page
 	headPage uint64 //pointer to list head node
-	headSeq  uint64 // monotonic sequence number to index into the list head
+	headSeq  uint64 // pointer to pointer inside head node
 	tailPage uint64
 	tailSeq  uint64
 
-	//in memory states
+	// in memory states
+	// acts like a snapshot
+	// it's a pointer to tailSeq but it updates after
 	maxSeq uint64 //saved tailSeqto prevent consuming newly added items
+
 }
 
+// Pops head and pushes to tail
 func (fl *FreeList) PopHead() uint64 {
 	ptr, head := flPop(fl)
 	if head != 0 {
@@ -36,6 +40,7 @@ func (fl *FreeList) PopHead() uint64 {
 	return ptr
 }
 
+// pushes ptr to tailSeq++
 func (fl *FreeList) PushTail(ptr uint64) {
 	//add it to the tail node
 	LNode(fl.set(fl.tailPage)).setPtr(seq2idx(fl.tailSeq), ptr)
@@ -59,15 +64,19 @@ func (fl *FreeList) PushTail(ptr uint64) {
 	}
 }
 
+// translates the global seq to a local index inside the current page
 func seq2idx(seq uint64) int {
 	return int(seq % FREE_LIST_CAP)
 }
 
 // make the newly added items available for consumption
+// before available its freezed
 func (fl *FreeList) SetMaxSeq() {
 	fl.maxSeq = fl.tailSeq
 }
 
+// gets head page pointer pointed by headSeq, then points to the next seq
+// if nexSeq is on the next page, then moves the headPage pointer
 func flPop(fl *FreeList) (ptr uint64, head uint64) {
 	if fl.headSeq == fl.maxSeq {
 		return 0, 0 //cannot advance
